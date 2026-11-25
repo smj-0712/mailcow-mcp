@@ -7,6 +7,16 @@
 #
 # Goal: complete coverage of useful Mailcow operations + IMAP/SMTP user actions.
 # Mirrors the official Mailcow OpenAPI spec (96 operations).
+#
+# Per-tool access classification (used by the write-tool gate,
+# MCP_MAILCOW_ENABLE_WRITE_TOOLS):
+#   readonly: true    -> safe to expose when write tools are disabled.
+#   readonly: false   -> changes state, sends mail, issues/changes credentials,
+#                        or may return secrets ("sensitive read"). Hidden from
+#                        tools/list and refused when write tools are disabled.
+#   write_params: [p] -> optional, on readonly tools only: a call that sets any
+#                        listed param to a truthy value is treated as a write.
+# A tool without a readonly field is treated as a write tool (fail closed).
 
 version: "1.0"
 
@@ -40,6 +50,7 @@ tools:
   - name: list_inbox
     mode: user
     category: mailbox.read
+    readonly: true
     description: |
       List messages in a folder (default INBOX), most recent first. Returns
       metadata (uid, from, to, subject, date, size, flags, has_attachments) but
@@ -53,6 +64,8 @@ tools:
   - name: read_message
     mode: user
     category: mailbox.read
+    readonly: true
+    write_params: [mark_read]  # mark_read=true sets \Seen
     description: |
       Fetch the full content of a message: headers, plain/html body, attachment
       metadata. Attachments are not downloaded (use download_attachment).
@@ -68,6 +81,7 @@ tools:
   - name: get_message_raw
     mode: user
     category: mailbox.read
+    readonly: true
     description: |
       Get the raw RFC822 source of a message (full source with headers).
       Useful for debugging deliverability or forwarding as-is.
@@ -78,6 +92,7 @@ tools:
   - name: search_messages
     mode: user
     category: mailbox.read
+    readonly: true
     description: |
       Server-side search via IMAP SEARCH. Supports criteria like FROM, TO,
       SUBJECT, BODY, SINCE, BEFORE, UNSEEN, FLAGGED, LARGER, SMALLER.
@@ -94,6 +109,7 @@ tools:
   - name: get_unread_count
     mode: user
     category: mailbox.read
+    readonly: true
     description: Get the count of unread messages per folder (or just one if specified).
     params:
       folder:
@@ -104,6 +120,7 @@ tools:
   - name: download_attachment
     mode: user
     category: mailbox.read
+    readonly: true
     description: |
       Download an attachment from a message. Returns base64-encoded bytes,
       filename, and MIME type.
@@ -118,12 +135,14 @@ tools:
   - name: list_folders
     mode: user
     category: mailbox.folders
+    readonly: true
     description: List all IMAP folders/mailboxes available to the user.
     params: {}
 
   - name: create_folder
     mode: user
     category: mailbox.folders
+    readonly: false
     description: Create a new IMAP folder.
     params:
       name: { type: string, required: true, description: "Folder name (e.g. 'Archive/2026' for nested)" }
@@ -131,6 +150,7 @@ tools:
   - name: rename_folder
     mode: user
     category: mailbox.folders
+    readonly: false
     description: Rename an existing folder.
     params:
       old_name: { type: string, required: true }
@@ -139,6 +159,7 @@ tools:
   - name: delete_folder
     mode: user
     category: mailbox.folders
+    readonly: false
     description: Delete a folder. Destructive — requires confirm=true.
     params:
       name: { type: string, required: true }
@@ -147,6 +168,7 @@ tools:
   - name: empty_folder
     mode: user
     category: mailbox.folders
+    readonly: false
     description: |
       Empty all messages from a folder (typically Trash or Junk). Destructive —
       requires confirm=true.
@@ -159,6 +181,7 @@ tools:
   - name: send_message
     mode: user
     category: mailbox.send
+    readonly: false  # sends mail
     description: |
       Send an email via SMTP submission. From header set to MAILCOW_MAIL_USER.
     params:
@@ -183,6 +206,7 @@ tools:
   - name: reply_to_message
     mode: user
     category: mailbox.send
+    readonly: false
     description: |
       Reply to a message. Auto-sets In-Reply-To and References headers.
       Subject prefixed with "Re: ". Body can include the original quoted.
@@ -196,6 +220,7 @@ tools:
   - name: forward_message
     mode: user
     category: mailbox.send
+    readonly: false
     description: Forward a message to other recipients.
     params:
       uid: { type: integer, required: true }
@@ -207,6 +232,7 @@ tools:
   - name: save_draft
     mode: user
     category: mailbox.send
+    readonly: false
     description: |
       Save a message as draft in the Drafts folder (without sending).
       Returns the new UID.
@@ -221,6 +247,7 @@ tools:
   - name: mark_read
     mode: user
     category: mailbox.flags
+    readonly: false
     description: Mark a message as read (\Seen flag).
     params:
       uid: { type: integer, required: true }
@@ -229,6 +256,7 @@ tools:
   - name: mark_unread
     mode: user
     category: mailbox.flags
+    readonly: false
     description: Mark a message as unread.
     params:
       uid: { type: integer, required: true }
@@ -237,6 +265,7 @@ tools:
   - name: mark_flagged
     mode: user
     category: mailbox.flags
+    readonly: false
     description: Toggle the \Flagged (star) flag.
     params:
       uid: { type: integer, required: true }
@@ -246,6 +275,7 @@ tools:
   - name: set_custom_flag
     mode: user
     category: mailbox.flags
+    readonly: false
     description: Set or clear a custom IMAP keyword/flag (e.g. $Important, $MailFlagBit0).
     params:
       uid: { type: integer, required: true }
@@ -256,6 +286,7 @@ tools:
   - name: move_message
     mode: user
     category: mailbox.flags
+    readonly: false
     description: Move a message to another folder.
     params:
       uid: { type: integer, required: true }
@@ -265,6 +296,7 @@ tools:
   - name: delete_message
     mode: user
     category: mailbox.flags
+    readonly: false
     description: |
       Delete a message. Defaults to moving to Trash. Use purge=true to
       bypass Trash (EXPUNGE immediate, irreversible).
@@ -282,12 +314,14 @@ tools:
   - name: domain_list
     mode: admin
     category: domain
+    readonly: true
     description: List all domains hosted on Mailcow.
     params: {}
 
   - name: domain_create
     mode: admin
     category: domain
+    readonly: false
     description: |
       Add a new domain to Mailcow. Note: DNS records (MX, SPF, DKIM, DMARC) must
       be configured separately at the registrar — this tool does not touch DNS.
@@ -305,6 +339,7 @@ tools:
   - name: domain_update
     mode: admin
     category: domain
+    readonly: false
     description: Update domain attributes (quota, mailbox limit, active, etc.).
     params:
       domain: { type: string, required: true }
@@ -318,6 +353,7 @@ tools:
   - name: domain_delete
     mode: admin
     category: domain
+    readonly: false
     description: |
       Delete a domain. Destructive — also removes all its mailboxes and aliases.
       Requires confirm=true.
@@ -328,6 +364,7 @@ tools:
   - name: domain_set_footer
     mode: admin
     category: domain
+    readonly: false
     description: Set or update a domain-wide email footer (HTML/text).
     params:
       domain: { type: string, required: true }
@@ -337,6 +374,7 @@ tools:
   - name: domain_set_tags
     mode: admin
     category: domain
+    readonly: false
     description: Set tags on a domain (free-form labels for organization).
     params:
       domain: { type: string, required: true }
@@ -345,6 +383,7 @@ tools:
   - name: domain_delete_tags
     mode: admin
     category: domain
+    readonly: false
     description: Remove all tags from a domain.
     params:
       domain: { type: string, required: true }
@@ -354,6 +393,7 @@ tools:
   - name: mailbox_list
     mode: admin
     category: mailbox
+    readonly: true
     description: List all mailboxes. Optional filter by domain.
     params:
       domain: { type: string, required: false }
@@ -361,6 +401,7 @@ tools:
   - name: mailbox_list_by_domain
     mode: admin
     category: mailbox
+    readonly: true
     description: List mailboxes belonging to a specific domain (alternative to mailbox_list with domain filter).
     params:
       domain: { type: string, required: true }
@@ -368,6 +409,7 @@ tools:
   - name: mailbox_create
     mode: admin
     category: mailbox
+    readonly: false
     description: |
       Create a new mailbox. Password must meet Mailcow's complexity policy.
       For service accounts, prefer creating an app password afterwards.
@@ -384,6 +426,7 @@ tools:
   - name: mailbox_update
     mode: admin
     category: mailbox
+    readonly: false
     description: Update mailbox attributes (name, quota, active, TLS enforcement, etc.).
     params:
       email: { type: string, required: true }
@@ -400,6 +443,7 @@ tools:
   - name: mailbox_set_password
     mode: admin
     category: mailbox
+    readonly: false  # changes a credential
     description: Reset a mailbox password. Prefer app passwords for services.
     params:
       email: { type: string, required: true }
@@ -409,6 +453,7 @@ tools:
   - name: mailbox_delete
     mode: admin
     category: mailbox
+    readonly: false
     description: Delete a mailbox. Destructive — requires confirm=true.
     params:
       email: { type: string, required: true }
@@ -417,6 +462,7 @@ tools:
   - name: mailbox_quota_report
     mode: admin
     category: mailbox
+    readonly: true
     description: |
       Quota usage for all mailboxes, sorted by usage descending. Useful for
       finding mailboxes nearing their limit.
@@ -426,6 +472,7 @@ tools:
   - name: mailbox_set_tags
     mode: admin
     category: mailbox
+    readonly: false
     description: Set tags on a mailbox.
     params:
       email: { type: string, required: true }
@@ -434,6 +481,7 @@ tools:
   - name: mailbox_delete_tags
     mode: admin
     category: mailbox
+    readonly: false
     description: Remove all tags from a mailbox.
     params:
       email: { type: string, required: true }
@@ -441,6 +489,7 @@ tools:
   - name: mailbox_set_acl
     mode: admin
     category: mailbox
+    readonly: false
     description: |
       Set ACL flags for a mailbox (what the user can do in SOGo:
       spam_alias, tls_policy, spam_score, spam_policy, delimiter_action,
@@ -452,6 +501,7 @@ tools:
   - name: mailbox_set_custom_attribute
     mode: admin
     category: mailbox
+    readonly: false
     description: Set a custom attribute (key/value) on a mailbox.
     params:
       email: { type: string, required: true }
@@ -463,6 +513,7 @@ tools:
   - name: alias_list
     mode: admin
     category: alias
+    readonly: true
     description: List all aliases. Optional filter by domain.
     params:
       domain: { type: string, required: false }
@@ -470,6 +521,7 @@ tools:
   - name: alias_create
     mode: admin
     category: alias
+    readonly: false
     description: Create an alias (forwarding address).
     params:
       address: { type: string, required: true }
@@ -483,6 +535,7 @@ tools:
   - name: alias_update
     mode: admin
     category: alias
+    readonly: false
     description: Update an alias.
     params:
       address: { type: string, required: true }
@@ -492,6 +545,7 @@ tools:
   - name: alias_delete
     mode: admin
     category: alias
+    readonly: false
     description: Delete an alias. Requires confirm=true.
     params:
       address: { type: string, required: true }
@@ -500,6 +554,7 @@ tools:
   - name: time_limited_alias_list
     mode: admin
     category: alias
+    readonly: true
     description: List time-limited (temporary) aliases.
     params:
       domain: { type: string, required: false }
@@ -507,6 +562,7 @@ tools:
   - name: time_limited_alias_create
     mode: admin
     category: alias
+    readonly: false
     description: |
       Create a time-limited alias that auto-expires. Useful for one-shot
       throwaway addresses.
@@ -520,6 +576,7 @@ tools:
   - name: app_password_list
     mode: admin
     category: app_password
+    readonly: true
     description: |
       List app passwords for a mailbox. Returns metadata only (passwords are
       hashed and never returned).
@@ -529,6 +586,7 @@ tools:
   - name: app_password_create
     mode: admin
     category: app_password
+    readonly: false  # creates a credential
     description: |
       Create an app password scoped to specific protocols. Must be passed in by
       caller (Mailcow does not generate). Returns the password ONCE.
@@ -544,6 +602,7 @@ tools:
   - name: app_password_delete
     mode: admin
     category: app_password
+    readonly: false
     description: Revoke an app password by ID.
     params:
       id: { type: integer, required: true }
@@ -554,6 +613,7 @@ tools:
   - name: dkim_list
     mode: admin
     category: dkim
+    readonly: true
     description: List DKIM keys for all domains (or a specific one).
     params:
       domain: { type: string, required: false }
@@ -561,6 +621,7 @@ tools:
   - name: dkim_create
     mode: admin
     category: dkim
+    readonly: false
     description: |
       Generate a new DKIM key pair for a domain. Returns the public key for
       DNS publication. Replaces any existing key for the same selector.
@@ -572,6 +633,7 @@ tools:
   - name: dkim_duplicate
     mode: admin
     category: dkim
+    readonly: false
     description: Duplicate an existing DKIM key to another domain (same key/selector).
     params:
       from_domain: { type: string, required: true }
@@ -580,6 +642,7 @@ tools:
   - name: dkim_delete
     mode: admin
     category: dkim
+    readonly: false
     description: Delete a DKIM key. Requires confirm=true.
     params:
       domain: { type: string, required: true }
@@ -590,6 +653,7 @@ tools:
   - name: bcc_list
     mode: admin
     category: bcc
+    readonly: true
     description: |
       List BCC maps. A BCC map silently sends a copy of every mail
       from/to a specific address to a third address (compliance, audit).
@@ -598,6 +662,7 @@ tools:
   - name: bcc_create
     mode: admin
     category: bcc
+    readonly: false
     description: Create a BCC map (silent copy rule).
     params:
       local_dest: { type: string, required: true, description: "Mailbox to monitor" }
@@ -608,6 +673,7 @@ tools:
   - name: bcc_delete
     mode: admin
     category: bcc
+    readonly: false
     description: Delete a BCC map. Requires confirm=true.
     params:
       id: { type: integer, required: true }
@@ -618,6 +684,7 @@ tools:
   - name: recipient_map_list
     mode: admin
     category: recipient_map
+    readonly: true
     description: |
       List recipient rewrites. A recipient map rewrites the destination of
       incoming mail (e.g. all to old@domain → new@domain).
@@ -626,6 +693,7 @@ tools:
   - name: recipient_map_create
     mode: admin
     category: recipient_map
+    readonly: false
     description: Create a recipient rewrite rule.
     params:
       old_dest: { type: string, required: true }
@@ -635,6 +703,7 @@ tools:
   - name: recipient_map_delete
     mode: admin
     category: recipient_map
+    readonly: false
     description: Delete a recipient map.
     params:
       id: { type: integer, required: true }
@@ -645,6 +714,7 @@ tools:
   - name: transport_list
     mode: admin
     category: transport
+    readonly: false  # sensitive read: response may include relay credentials
     description: |
       List sender-dependent transports. Used to route outgoing mail through
       different relays based on the sender (or destination).
@@ -653,6 +723,7 @@ tools:
   - name: transport_create
     mode: admin
     category: transport
+    readonly: false
     description: Create a transport map.
     params:
       destination: { type: string, required: true, description: "Destination domain or address" }
@@ -664,6 +735,7 @@ tools:
   - name: transport_delete
     mode: admin
     category: transport
+    readonly: false
     description: Delete a transport.
     params:
       id: { type: integer, required: true }
@@ -674,12 +746,14 @@ tools:
   - name: relayhost_list
     mode: admin
     category: relayhost
+    readonly: false  # sensitive read: response may include relay credentials
     description: List configured relayhosts (smarthosts) for outbound mail.
     params: {}
 
   - name: relayhost_create
     mode: admin
     category: relayhost
+    readonly: false
     description: Create a relayhost (smarthost configuration).
     params:
       hostname: { type: string, required: true, description: "e.g. smtp.relay.com" }
@@ -690,6 +764,7 @@ tools:
   - name: relayhost_delete
     mode: admin
     category: relayhost
+    readonly: false
     description: Delete a relayhost.
     params:
       id: { type: integer, required: true }
@@ -700,6 +775,7 @@ tools:
   - name: tls_policy_list
     mode: admin
     category: tls_policy
+    readonly: true
     description: |
       List TLS policy overrides (per-destination TLS enforcement).
     params: {}
@@ -707,6 +783,7 @@ tools:
   - name: tls_policy_create
     mode: admin
     category: tls_policy
+    readonly: false
     description: Force TLS policy for outgoing mail to a specific destination.
     params:
       dest: { type: string, required: true, description: "Destination domain or address" }
@@ -717,6 +794,7 @@ tools:
   - name: tls_policy_delete
     mode: admin
     category: tls_policy
+    readonly: false
     description: Delete a TLS policy.
     params:
       id: { type: integer, required: true }
@@ -727,6 +805,7 @@ tools:
   - name: forward_host_list
     mode: admin
     category: forward_host
+    readonly: true
     description: |
       List trusted forwarding hosts (servers allowed to relay mail through
       Mailcow without DNS-based verification).
@@ -735,6 +814,7 @@ tools:
   - name: forward_host_create
     mode: admin
     category: forward_host
+    readonly: false
     description: Add a trusted forwarding host.
     params:
       hostname: { type: string, required: true }
@@ -744,6 +824,7 @@ tools:
   - name: forward_host_delete
     mode: admin
     category: forward_host
+    readonly: false
     description: Remove a forwarding host.
     params:
       hostname: { type: string, required: true }
@@ -754,6 +835,7 @@ tools:
   - name: sync_job_list
     mode: admin
     category: sync_job
+    readonly: false  # sensitive read: response may include remote IMAP credentials
     description: |
       List IMAP sync jobs (rules to fetch mail from external servers into
       a local Mailcow mailbox).
@@ -763,6 +845,7 @@ tools:
   - name: sync_job_create
     mode: admin
     category: sync_job
+    readonly: false
     description: Create an IMAP sync job to fetch mail from a remote server.
     params:
       mailbox: { type: string, required: true, description: "Local destination mailbox" }
@@ -790,6 +873,7 @@ tools:
   - name: sync_job_update
     mode: admin
     category: sync_job
+    readonly: false
     description: Update an existing sync job.
     params:
       id: { type: integer, required: true }
@@ -800,6 +884,7 @@ tools:
   - name: sync_job_delete
     mode: admin
     category: sync_job
+    readonly: false
     description: Delete a sync job.
     params:
       id: { type: integer, required: true }
@@ -810,6 +895,7 @@ tools:
   - name: resource_list
     mode: admin
     category: resource
+    readonly: true
     description: |
       List shared resources (meeting rooms, equipment) used in SOGo calendars.
     params: {}
@@ -817,6 +903,7 @@ tools:
   - name: resource_create
     mode: admin
     category: resource
+    readonly: false
     description: Create a calendar resource (room/equipment).
     params:
       name: { type: string, required: true }
@@ -832,6 +919,7 @@ tools:
   - name: resource_delete
     mode: admin
     category: resource
+    readonly: false
     description: Delete a resource.
     params:
       name: { type: string, required: true }
@@ -842,12 +930,14 @@ tools:
   - name: oauth2_client_list
     mode: admin
     category: oauth2
+    readonly: false  # sensitive read: response may include client secrets
     description: List OAuth2 clients registered with Mailcow.
     params: {}
 
   - name: oauth2_client_create
     mode: admin
     category: oauth2
+    readonly: false
     description: Register a new OAuth2 client. Returns the client_id and client_secret.
     params:
       redirect_uri: { type: string, required: true }
@@ -857,6 +947,7 @@ tools:
   - name: oauth2_client_delete
     mode: admin
     category: oauth2
+    readonly: false
     description: Delete an OAuth2 client.
     params:
       id: { type: integer, required: true }
@@ -867,12 +958,14 @@ tools:
   - name: domain_admin_list
     mode: admin
     category: domain_admin
+    readonly: true
     description: List domain admin accounts (limited admin scoped to specific domains).
     params: {}
 
   - name: domain_admin_create
     mode: admin
     category: domain_admin
+    readonly: false
     description: Create a domain admin account.
     params:
       username: { type: string, required: true }
@@ -883,6 +976,7 @@ tools:
   - name: domain_admin_update
     mode: admin
     category: domain_admin
+    readonly: false
     description: Update a domain admin account.
     params:
       username: { type: string, required: true }
@@ -893,6 +987,7 @@ tools:
   - name: domain_admin_set_acl
     mode: admin
     category: domain_admin
+    readonly: false
     description: Set ACL flags for a domain admin (what they can do).
     params:
       username: { type: string, required: true }
@@ -901,6 +996,7 @@ tools:
   - name: domain_admin_delete
     mode: admin
     category: domain_admin
+    readonly: false
     description: Delete a domain admin.
     params:
       username: { type: string, required: true }
@@ -909,6 +1005,7 @@ tools:
   - name: domain_admin_sso_token
     mode: admin
     category: domain_admin
+    readonly: false  # issues a login token
     description: |
       Issue a single sign-on (SSO) token for a Domain Admin user. Returns a
       one-shot URL that, when visited, logs the user into SOGo/Admin UI without
@@ -921,6 +1018,7 @@ tools:
   - name: domain_policy_list_blacklist
     mode: admin
     category: domain_policy
+    readonly: true
     description: List blacklisted senders for a domain (always rejected).
     params:
       domain: { type: string, required: true }
@@ -928,6 +1026,7 @@ tools:
   - name: domain_policy_list_whitelist
     mode: admin
     category: domain_policy
+    readonly: true
     description: List whitelisted senders for a domain (skip spam check).
     params:
       domain: { type: string, required: true }
@@ -935,6 +1034,7 @@ tools:
   - name: domain_policy_create
     mode: admin
     category: domain_policy
+    readonly: false
     description: Add a sender to a domain's blacklist or whitelist.
     params:
       domain: { type: string, required: true }
@@ -945,6 +1045,7 @@ tools:
   - name: domain_policy_delete
     mode: admin
     category: domain_policy
+    readonly: false
     description: Remove a sender from a domain's blacklist or whitelist.
     params:
       id: { type: integer, required: true }
@@ -955,12 +1056,14 @@ tools:
   - name: quarantine_list
     mode: admin
     category: quarantine
+    readonly: true
     description: List quarantined messages (held due to spam/policy).
     params: {}
 
   - name: quarantine_release
     mode: admin
     category: quarantine
+    readonly: false
     description: Release a quarantined message (deliver to recipient).
     params:
       ids: { type: array, items: { type: integer }, required: true }
@@ -968,6 +1071,7 @@ tools:
   - name: quarantine_learn_spam
     mode: admin
     category: quarantine
+    readonly: false
     description: Mark quarantined messages as spam (train Rspamd).
     params:
       ids: { type: array, items: { type: integer }, required: true }
@@ -975,6 +1079,7 @@ tools:
   - name: quarantine_delete
     mode: admin
     category: quarantine
+    readonly: false
     description: Delete quarantined messages permanently. Requires confirm=true.
     params:
       ids: { type: array, items: { type: integer }, required: true }
@@ -983,6 +1088,7 @@ tools:
   - name: quarantine_set_notification
     mode: admin
     category: quarantine
+    readonly: false
     description: Configure quarantine notification settings (recipient frequency).
     params:
       release_format: { type: string, enum: [raw, attachment], default: attachment }
@@ -1001,18 +1107,21 @@ tools:
   - name: queue_list
     mode: admin
     category: queue
+    readonly: true
     description: List messages in the Postfix queue.
     params: {}
 
   - name: queue_flush
     mode: admin
     category: queue
+    readonly: false
     description: Force Postfix to retry sending all queued messages.
     params: {}
 
   - name: queue_delete
     mode: admin
     category: queue
+    readonly: false
     description: Delete messages from the Postfix queue. Requires confirm=true.
     params:
       queue_ids: { type: array, items: { type: string }, required: true }
@@ -1023,6 +1132,7 @@ tools:
   - name: fail2ban_get
     mode: admin
     category: fail2ban
+    readonly: true
     description: |
       Get Fail2Ban status: active jail config, currently banned IPs, white/blacklist.
     params: {}
@@ -1030,6 +1140,7 @@ tools:
   - name: fail2ban_update
     mode: admin
     category: fail2ban
+    readonly: false
     description: Update Fail2Ban configuration (bantime, max retries, white/blacklist).
     params:
       ban_time: { type: integer, required: false, description: "Seconds" }
@@ -1042,6 +1153,7 @@ tools:
   - name: fail2ban_unban
     mode: admin
     category: fail2ban
+    readonly: false
     description: Unban a specific IP currently in Fail2Ban.
     params:
       ip: { type: string, required: true }
@@ -1051,6 +1163,7 @@ tools:
   - name: ratelimit_get_mailbox
     mode: admin
     category: ratelimit
+    readonly: true
     description: Get rate limit for a mailbox.
     params:
       email: { type: string, required: true }
@@ -1058,6 +1171,7 @@ tools:
   - name: ratelimit_set_mailbox
     mode: admin
     category: ratelimit
+    readonly: false
     description: Set sender rate limit for a mailbox (msgs per timeframe).
     params:
       email: { type: string, required: true }
@@ -1067,6 +1181,7 @@ tools:
   - name: ratelimit_get_domain
     mode: admin
     category: ratelimit
+    readonly: true
     description: Get rate limit for a domain.
     params:
       domain: { type: string, required: true }
@@ -1074,6 +1189,7 @@ tools:
   - name: ratelimit_set_domain
     mode: admin
     category: ratelimit
+    readonly: false
     description: Set rate limit for a domain.
     params:
       domain: { type: string, required: true }
@@ -1085,6 +1201,7 @@ tools:
   - name: spam_score_get
     mode: admin
     category: spam
+    readonly: true
     description: |
       Get spam filter scores (low_score / high_score thresholds) for a mailbox
       or globally.
@@ -1094,6 +1211,7 @@ tools:
   - name: spam_score_set
     mode: admin
     category: spam
+    readonly: false
     description: |
       Set spam filter scores for a mailbox (low = greylist threshold,
       high = reject threshold).
@@ -1107,6 +1225,7 @@ tools:
   - name: cors_settings_update
     mode: admin
     category: settings
+    readonly: false
     description: Update API CORS allowed origins/methods/headers.
     params:
       allowed_origins: { type: array, items: { type: string }, required: false }
@@ -1115,6 +1234,7 @@ tools:
   - name: identity_provider_settings_update
     mode: admin
     category: settings
+    readonly: false
     description: Configure external identity provider (OIDC) for SOGo SSO.
     params:
       authsource: { type: string, enum: [keycloak, generic-oidc, ldap, mailcow], required: true }
@@ -1130,6 +1250,7 @@ tools:
   - name: pushover_set
     mode: admin
     category: settings
+    readonly: false
     description: Update Pushover (mobile notification) settings for a mailbox.
     params:
       email: { type: string, required: true }
@@ -1146,6 +1267,7 @@ tools:
   - name: logs_get_postfix
     mode: admin
     category: logs
+    readonly: true
     description: Retrieve recent Postfix logs (mail transactions).
     params:
       lines: { type: integer, default: 100, max: 5000 }
@@ -1153,6 +1275,7 @@ tools:
   - name: logs_get_dovecot
     mode: admin
     category: logs
+    readonly: true
     description: Retrieve recent Dovecot logs (IMAP/POP3 access).
     params:
       lines: { type: integer, default: 100, max: 5000 }
@@ -1160,6 +1283,7 @@ tools:
   - name: logs_get_rspamd
     mode: admin
     category: logs
+    readonly: true
     description: Retrieve recent Rspamd logs (spam scanning).
     params:
       lines: { type: integer, default: 100, max: 5000 }
@@ -1167,6 +1291,7 @@ tools:
   - name: logs_get_sogo
     mode: admin
     category: logs
+    readonly: true
     description: Retrieve recent SOGo logs (webmail).
     params:
       lines: { type: integer, default: 100, max: 5000 }
@@ -1174,6 +1299,7 @@ tools:
   - name: logs_get_acme
     mode: admin
     category: logs
+    readonly: true
     description: Retrieve recent ACME logs (Let's Encrypt cert renewal).
     params:
       lines: { type: integer, default: 100, max: 5000 }
@@ -1181,6 +1307,7 @@ tools:
   - name: logs_get_netfilter
     mode: admin
     category: logs
+    readonly: true
     description: Retrieve recent Netfilter logs (firewall events).
     params:
       lines: { type: integer, default: 100, max: 5000 }
@@ -1188,6 +1315,7 @@ tools:
   - name: logs_get_watchdog
     mode: admin
     category: logs
+    readonly: true
     description: Retrieve recent Watchdog logs (service health monitoring).
     params:
       lines: { type: integer, default: 100, max: 5000 }
@@ -1195,6 +1323,7 @@ tools:
   - name: logs_get_api
     mode: admin
     category: logs
+    readonly: false  # sensitive read: API log may contain request payloads
     description: Retrieve recent API access logs.
     params:
       lines: { type: integer, default: 100, max: 5000 }
@@ -1202,6 +1331,7 @@ tools:
   - name: logs_get_autodiscover
     mode: admin
     category: logs
+    readonly: true
     description: Retrieve recent Autodiscover logs (mobile/desktop client config).
     params:
       lines: { type: integer, default: 100, max: 5000 }
@@ -1209,6 +1339,7 @@ tools:
   - name: logs_get_ratelimit
     mode: admin
     category: logs
+    readonly: true
     description: Retrieve recent rate limit hit logs.
     params:
       lines: { type: integer, default: 100, max: 5000 }
@@ -1218,24 +1349,28 @@ tools:
   - name: server_version
     mode: admin
     category: status
+    readonly: true
     description: Get Mailcow version info.
     params: {}
 
   - name: server_containers_status
     mode: admin
     category: status
+    readonly: true
     description: Get the status of all Mailcow Docker containers.
     params: {}
 
   - name: server_vmail_status
     mode: admin
     category: status
+    readonly: true
     description: Get vmail (mail storage) disk usage.
     params: {}
 
   - name: server_status_summary
     mode: admin
     category: status
+    readonly: true
     description: |
       Combined health check: version, containers (running/healthy/down counts),
       vmail disk %, queue length, fail2ban active bans count.
@@ -1247,6 +1382,7 @@ tools:
   - name: send_test_mail
     mode: admin
     category: delivery
+    readonly: false  # sends mail
     description: |
       Send a test email through the local Postfix to verify delivery. Returns
       the Postfix queue ID for log tracing.

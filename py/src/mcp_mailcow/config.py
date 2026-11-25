@@ -10,6 +10,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NoReturn
 
 from platformdirs import user_state_dir
 
@@ -103,3 +104,111 @@ def load_admin_config() -> AdminConfig:
         api_timeout=float(os.environ.get("MCP_MAILCOW_API_TIMEOUT", "60")),
         audit_log=_path_env("MCP_MAILCOW_AUDIT_LOG", DEFAULT_AUDIT_LOG),
     )
+
+
+# =============================================================================
+# Transport (stdio / HTTP)
+# =============================================================================
+
+TRANSPORTS = ("stdio", "http")
+DEFAULT_TRANSPORT = "stdio"
+DEFAULT_HTTP_HOST = "0.0.0.0"  # container/panel deployments bind all interfaces
+DEFAULT_HTTP_PORT = 8000
+_MAX_PORT = 65535
+
+
+def _fail(msg: str) -> NoReturn:
+    sys.stderr.write(f"error: {msg}\n")
+    sys.exit(2)
+
+
+MODES = ("user", "admin")
+
+
+def env_mode() -> str | None:
+    """Default for ``--mode`` (``MCP_MAILCOW_MODE``); None when unset/empty."""
+    val = (os.environ.get("MCP_MAILCOW_MODE") or "").strip().lower()
+    if not val:
+        return None
+    if val not in MODES:
+        _fail(f"MCP_MAILCOW_MODE must be one of {', '.join(MODES)}")
+    return val
+
+
+def env_transport() -> str:
+    """Default for ``--transport`` (``MCP_MAILCOW_TRANSPORT``, else stdio)."""
+    val = (os.environ.get("MCP_MAILCOW_TRANSPORT") or DEFAULT_TRANSPORT).strip().lower()
+    if val not in TRANSPORTS:
+        _fail(f"MCP_MAILCOW_TRANSPORT must be one of {', '.join(TRANSPORTS)}")
+    return val
+
+
+def env_host() -> str:
+    """Default for ``--host`` (``MCP_MAILCOW_HOST``, else 0.0.0.0)."""
+    return (os.environ.get("MCP_MAILCOW_HOST") or DEFAULT_HTTP_HOST).strip()
+
+
+def env_port() -> int:
+    """Default for ``--port``: ``MCP_MAILCOW_PORT``, else ``SERVER_PORT`` (set by
+    Pterodactyl Wings to the server's primary allocation), else 8000."""
+    for var in ("MCP_MAILCOW_PORT", "SERVER_PORT"):
+        raw = (os.environ.get(var) or "").strip()
+        if raw:
+            break
+    else:
+        return DEFAULT_HTTP_PORT
+    try:
+        port = int(raw)
+    except ValueError:
+        port = -1
+    if not 0 < port <= _MAX_PORT:
+        _fail(f"{var} must be an integer between 1 and 65535")
+    return port
+
+
+def _csv_env(var: str) -> tuple[str, ...]:
+    return tuple(p.strip() for p in os.environ.get(var, "").split(",") if p.strip())
+
+
+@dataclass(frozen=True)
+class HttpConfig:
+    """Settings for the HTTP transport.
+
+    ``auth_token`` is excluded from __repr__ so it can never leak through a
+    log line or traceback that formats the config object.
+    """
+
+    host: str
+    port: int
+    auth_token: str | None = field(default=None, repr=False)
+    allowed_hosts: tuple[str, ...] = ()
+    allowed_origins: tuple[str, ...] = ()
+
+
+def load_http_config(host: str, port: int) -> HttpConfig:
+    """Load HTTP-only settings. Exits (code 2) when no auth token is configured
+    and MCP_MAILCOW_ALLOW_NO_AUTH is not explicitly true."""
+    token = (os.environ.get("MCP_MAILCOW_AUTH_TOKEN") or "").strip() or None
+    if token is None and not _bool_env("MCP_MAILCOW_ALLOW_NO_AUTH", False):
+        _fail(
+            "HTTP transport requires MCP_MAILCOW_AUTH_TOKEN (clients must send "
+            "'Authorization: Bearer <token>'). Refusing to start an unauthenticated "
+            "server. Set MCP_MAILCOW_ALLOW_NO_AUTH=true only if access is already "
+            "restricted by other means (private network, authenticating proxy)."
+        )
+    if not 0 < port <= _MAX_PORT:
+        _fail("--port must be between 1 and 65535")
+    return HttpConfig(
+        host=host,
+        port=port,
+        auth_token=token,
+        allowed_hosts=_csv_env("MCP_MAILCOW_ALLOWED_HOSTS"),
+        allowed_origins=_csv_env("MCP_MAILCOW_ALLOWED_ORIGINS"),
+    )
+
+
+def write_tools_enabled(transport: str) -> bool:
+    """``MCP_MAILCOW_ENABLE_WRITE_TOOLS``; defaults to true for stdio (unchanged
+    behaviour) and false for HTTP (a network-reachable server is read-only
+    unless explicitly opted in)."""
+    return _bool_env("MCP_MAILCOW_ENABLE_WRITE_TOOLS", transport == "stdio")

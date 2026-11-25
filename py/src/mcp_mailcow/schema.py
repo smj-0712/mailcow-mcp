@@ -52,6 +52,35 @@ def tools_for_mode(schema: dict[str, Any], mode: Mode) -> list[dict[str, Any]]:
     return [t for t in schema.get("tools", []) if t.get("mode") == mode]
 
 
+def is_readonly(tool_def: dict[str, Any]) -> bool:
+    """True only when the schema explicitly marks the tool ``readonly: true``.
+
+    A missing or non-boolean value counts as a write tool (fail closed).
+    """
+    return tool_def.get("readonly") is True
+
+
+def is_write_call(tool_def: dict[str, Any], arguments: dict[str, Any] | None) -> bool:
+    """Whether a call must be refused when write tools are disabled.
+
+    Write tools always are. A read-only tool is too when the call sets one of
+    its ``write_params`` (e.g. ``read_message`` with ``mark_read: true``).
+    """
+    if not is_readonly(tool_def):
+        return True
+    args = arguments or {}
+    return any(args.get(p) for p in tool_def.get("write_params") or ())
+
+
+def visible_tools(
+    tool_defs: list[dict[str, Any]], enable_write_tools: bool
+) -> list[dict[str, Any]]:
+    """Tool definitions to advertise in tools/list."""
+    if enable_write_tools:
+        return list(tool_defs)
+    return [t for t in tool_defs if is_readonly(t)]
+
+
 def to_mcp_tool(tool_def: dict[str, Any]) -> dict[str, Any]:
     """Convert our YAML tool def into the MCP Tool schema format.
 
