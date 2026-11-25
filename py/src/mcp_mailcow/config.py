@@ -185,10 +185,38 @@ class HttpConfig:
     allowed_origins: tuple[str, ...] = ()
 
 
+MIN_TOKEN_LENGTH = 24
+# The value shipped in .env.example. Copying that file unedited must not start a server.
+PLACEHOLDER_TOKEN = "replace-with-a-long-random-token"
+
+
+def _check_token_strength(token: str) -> None:
+    """Exit (code 2) if ``token`` is the example placeholder or too short.
+
+    The messages state the reason only; the token value is never included.
+    """
+    if token == PLACEHOLDER_TOKEN:
+        _fail(
+            "MCP_MAILCOW_AUTH_TOKEN is still the placeholder value from .env.example. "
+            "Refusing to start; set a real random token, e.g. "
+            "python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )
+    if len(token) < MIN_TOKEN_LENGTH:
+        _fail(
+            f"MCP_MAILCOW_AUTH_TOKEN is too short (minimum {MIN_TOKEN_LENGTH} characters). "
+            "Refusing to start; generate one with "
+            "python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )
+
+
 def load_http_config(host: str, port: int) -> HttpConfig:
     """Load HTTP-only settings. Exits (code 2) when no auth token is configured
-    and MCP_MAILCOW_ALLOW_NO_AUTH is not explicitly true."""
+    and MCP_MAILCOW_ALLOW_NO_AUTH is not explicitly true, or when a configured
+    token is the .env.example placeholder or shorter than MIN_TOKEN_LENGTH.
+    A configured token is always validated, even if ALLOW_NO_AUTH is true."""
     token = (os.environ.get("MCP_MAILCOW_AUTH_TOKEN") or "").strip() or None
+    if token is not None:
+        _check_token_strength(token)
     if token is None and not _bool_env("MCP_MAILCOW_ALLOW_NO_AUTH", False):
         _fail(
             "HTTP transport requires MCP_MAILCOW_AUTH_TOKEN (clients must send "

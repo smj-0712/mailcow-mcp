@@ -12,7 +12,7 @@ import pytest
 
 from mcp_mailcow import __main__ as cli
 from mcp_mailcow import __version__, http_app
-from mcp_mailcow.config import write_tools_enabled
+from mcp_mailcow.config import MIN_TOKEN_LENGTH, PLACEHOLDER_TOKEN, write_tools_enabled
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOKEN = "cli-test-token-9876543210"
@@ -144,3 +144,82 @@ def test_root_main_py_runs_from_checkout() -> None:
         capture_output=True, text=True, check=True, timeout=60,
     )
     assert out.stdout.strip() == f"mcp-mailcow {__version__}"
+
+
+# --- token strength check -------------------------------------------------------
+
+
+def _start_http(monkeypatch: pytest.MonkeyPatch, token: str | None, **extra: str) -> int:
+    if token is not None:
+        monkeypatch.setenv("MCP_MAILCOW_AUTH_TOKEN", token)
+    for k, v in extra.items():
+        monkeypatch.setenv(k, v)
+    return _main("--mode", "admin", "--transport", "http")
+
+
+def test_placeholder_token_rejected(
+    monkeypatch: pytest.MonkeyPatch, fake_uvicorn: list[dict[str, Any]],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert _start_http(monkeypatch, PLACEHOLDER_TOKEN) == EXIT_USAGE
+    assert fake_uvicorn == []
+    err = capsys.readouterr().err
+    assert "placeholder" in err
+    assert PLACEHOLDER_TOKEN not in err  # reason only, never the value
+
+
+def test_placeholder_token_rejected_even_with_whitespace(
+    monkeypatch: pytest.MonkeyPatch, fake_uvicorn: list[dict[str, Any]]
+) -> None:
+    assert _start_http(monkeypatch, f"  {PLACEHOLDER_TOKEN}\t") == EXIT_USAGE
+    assert fake_uvicorn == []
+
+
+def test_placeholder_matches_env_example() -> None:
+    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert f"MCP_MAILCOW_AUTH_TOKEN={PLACEHOLDER_TOKEN}\n" in text.replace("\r\n", "\n")
+
+
+@pytest.mark.parametrize("length", [1, 8, MIN_TOKEN_LENGTH - 1])
+def test_short_token_rejected(
+    monkeypatch: pytest.MonkeyPatch, fake_uvicorn: list[dict[str, Any]],
+    capsys: pytest.CaptureFixture[str], length: int,
+) -> None:
+    short = "x7Qp" * 8
+    short = short[:length]
+    assert _start_http(monkeypatch, short) == EXIT_USAGE
+    assert fake_uvicorn == []
+    err = capsys.readouterr().err
+    assert "too short" in err and str(MIN_TOKEN_LENGTH) in err
+    assert short not in err
+
+
+def test_length_is_measured_after_stripping(
+    monkeypatch: pytest.MonkeyPatch, fake_uvicorn: list[dict[str, Any]]
+) -> None:
+    padded = " " * 10 + "a" * (MIN_TOKEN_LENGTH - 1) + " " * 10
+    assert _start_http(monkeypatch, padded) == EXIT_USAGE
+    assert fake_uvicorn == []
+
+
+def test_token_of_exactly_min_length_accepted(
+    monkeypatch: pytest.MonkeyPatch, fake_uvicorn: list[dict[str, Any]]
+) -> None:
+    assert _start_http(monkeypatch, "k9" * (MIN_TOKEN_LENGTH // 2)) == 0
+    assert len(fake_uvicorn) == 1
+
+
+@pytest.mark.parametrize("bad", [PLACEHOLDER_TOKEN, "short"])
+def test_weak_token_rejected_even_with_allow_no_auth(
+    monkeypatch: pytest.MonkeyPatch, fake_uvicorn: list[dict[str, Any]], bad: str
+) -> None:
+    """A configured token enables auth, so it must be a real one regardless."""
+    assert _start_http(monkeypatch, bad, MCP_MAILCOW_ALLOW_NO_AUTH="true") == EXIT_USAGE
+    assert fake_uvicorn == []
+
+
+def test_allow_no_auth_without_token_unchanged(
+    monkeypatch: pytest.MonkeyPatch, fake_uvicorn: list[dict[str, Any]]
+) -> None:
+    assert _start_http(monkeypatch, None, MCP_MAILCOW_ALLOW_NO_AUTH="true") == 0
+    assert len(fake_uvicorn) == 1

@@ -193,6 +193,7 @@ Pterodactyl Wings 소스(`server/server.go`의 `GetEnvironmentVariables`, develo
 
 - `MCP_MAILCOW_AUTH_TOKEN`이 있으면 `/mcp` 요청에 `Authorization: Bearer <토큰>` 헤더가 있어야 합니다.
   헤더가 없거나 토큰이 다르면 401을 돌려줍니다. 토큰 비교는 `hmac.compare_digest`로 합니다.
+  토큰은 24자 이상이어야 하고, 예시 값은 거부된다(`.env.example`의 값 그대로는 시작하지 않습니다).
   `/health`는 인증 대상이 아닙니다.
 - 토큰 없이 `--transport http`로 시작하면 이유를 출력하고 종료 코드 2로 끝납니다.
   다른 수단(사설망, 인증 프록시)으로 접근이 막혀 있을 때만 `MCP_MAILCOW_ALLOW_NO_AUTH=true`를 쓰세요.
