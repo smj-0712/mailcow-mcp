@@ -97,6 +97,43 @@ python main.py --mode admin --transport http   # .env보다 플래그가 우선
 
 설치된 `mcp-mailcow` 명령은 `.env`를 읽지 않고 환경변수와 플래그만 씁니다.
 
+### 지원하는 mcp 버전
+
+`mcp` 패키지(MCP Python SDK) **1.10 이상 1.x**와 **2.x**를 모두 지원합니다(`mcp>=1.10.0,<3`).
+두 버전은 저수준 `Server` API가 다릅니다(1.x는 `@server.list_tools()` 데코레이터, 2.x는
+`Server(..., on_list_tools=..., on_call_tool=...)`). 시작할 때 설치된 쪽을 기능 감지로 골라 씁니다
+(`py/src/mcp_mailcow/_compat.py`). 도구 목록, 쓰기 도구 게이트, 감사 로그, 에러 정제는 두 버전이 같은 코드를 씁니다.
+
+두 버전의 응답 차이는 `isError` 하나입니다.
+
+| 상황 | mcp 1.x | mcp 2.x |
+|---|---|---|
+| 정상 결과 | `isError: false` | `isError: false` |
+| 쓰기 도구 게이트 거부, 도구 실패, 없는 도구, `confirm` 필요 | `isError: false` (기존 동작 유지) | `isError: true` |
+| 인자가 `inputSchema`에 맞지 않음 | `isError: true` | `isError: true` |
+
+텍스트 내용은 두 버전이 같습니다. 3.x는 API가 다시 바뀔 수 있어 확인 전까지 허용하지 않습니다.
+
+### venv 없이 실행
+
+venv 없이 시스템(전역) 파이썬에서 바로 실행할 수 있습니다. 전역에 이미 `mcp` 1.x나 2.x가 있으면 그대로 씁니다.
+
+```bash
+cd mailcow-mcp
+python -m pip install --user -r requirements.txt   # 이미 설치돼 있으면 생략
+python main.py                                     # .env 또는 환경변수로 설정
+```
+
+`.env` 없이 환경변수만으로도 됩니다(예: HTTP 모드).
+
+```bash
+MCP_MAILCOW_MODE=admin MCP_MAILCOW_TRANSPORT=http MCP_MAILCOW_AUTH_TOKEN=긴임의문자열 \
+MAILCOW_ADMIN_URL=https://mail.example.com MAILCOW_ADMIN_API_KEY=발급한키 python main.py
+```
+
+전역 파이썬이 외부 관리 환경(PEP 668, 일부 Linux 배포판)이라 `pip install`이 막히면 venv를 쓰거나
+배포판 패키지를 쓰세요. 다른 프로그램과 의존성이 충돌할 수 있으면 venv를 권장합니다.
+
 ### HTTP 전송
 
 | 옵션 | 기본값 | 환경변수 |
@@ -213,6 +250,8 @@ Pterodactyl Wings 소스(`server/server.go`의 `GetEnvironmentVariables`, develo
 - `read_message`는 읽기 도구지만 `mark_read: true`로 호출하면 `\Seen` 플래그를 바꾸므로 거부합니다
   (스키마의 `write_params`).
 - `readonly` 필드가 없는 도구는 쓰기 도구로 취급합니다.
+- 거부 응답은 mcp 2.x에서는 `isError: true`, 1.x에서는 `isError: false`인 텍스트입니다
+  ([지원하는 mcp 버전](#지원하는-mcp-버전) 참고).
 
 ## 보안 권장 사항
 - admin API 키는 사실상 서버 전체 권한입니다. 조회만 할 때는 읽기 전용 키를 쓰세요.
@@ -234,6 +273,7 @@ mypy src/mcp_mailcow
 
 루트의 `tools-schema.yaml`이 도구 정의의 원본이고, `py/src/mcp_mailcow/tools-schema.yaml`에 같은 내용이 복사돼 있습니다. 도구를 바꾸면 두 파일을 함께 갱신해야 합니다(테스트가 두 파일이 같은지, 모든 도구에 `readonly`가 있는지 확인합니다).
 의존성을 바꾸면 `py/pyproject.toml`과 루트 `requirements.txt`를 함께 고치세요.
+mcp 호환 계층을 고쳤다면 `pip install "mcp<2"`와 `pip install "mcp>=2,<3"` 환경에서 각각 `pytest`를 돌려 두 버전을 모두 확인하세요.
 
 ## 라이선스
 
