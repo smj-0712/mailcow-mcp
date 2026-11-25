@@ -7,10 +7,12 @@ clear error rather than failing at first tool call.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NoReturn
+from urllib.parse import urlsplit
 
 from platformdirs import user_state_dir
 
@@ -107,6 +109,146 @@ def load_admin_config() -> AdminConfig:
 
 
 # =============================================================================
+# all mode (admin API + per-mailbox IMAP/SMTP via temporary app passwords)
+# =============================================================================
+
+#: Default lifetime (seconds) of a cached temporary app password.
+DEFAULT_TEMP_PASSWORD_TTL = 600
+_MIN_TEMP_PASSWORD_TTL = 30
+_MAX_TEMP_PASSWORD_TTL = 86400
+
+# Deliberately strict: the address is also used in an admin API URL path
+# (/api/v1/get/app-passwd/all/<mailbox>), so no '/', '?', '#', '%' or spaces.
+_MAILBOX_RE = re.compile(r"^[a-z0-9._+\-]+@[a-z0-9](?:[a-z0-9.\-]*[a-z0-9])?$")
+
+
+def normalize_mailbox(value: object) -> str | None:
+    """Lower-cased, stripped mailbox address, or None if it is not a plain
+    ``local@domain`` address."""
+    if not isinstance(value, str):
+        return None
+    mb = value.strip().lower()
+    return mb if _MAILBOX_RE.match(mb) else None
+
+
+@dataclass(frozen=True)
+class MailboxAllowList:
+    """Parsed MCP_MAILCOW_MAILBOXES. ``allow_all`` is set by a ``*`` entry."""
+
+    mailboxes: frozenset[str] = frozenset()
+    allow_all: bool = False
+
+    def allows(self, mailbox: str) -> bool:
+        return self.allow_all or mailbox in self.mailboxes
+
+
+def parse_mailbox_allowlist(raw: str) -> MailboxAllowList:
+    """Parse a comma-separated allow-list (case-insensitive, blanks ignored).
+
+    Raises ValueError for an empty list or an entry that is not ``*`` or a
+    plain mailbox address. The message never includes the offending value.
+    """
+    entries = [p.strip() for p in raw.split(",") if p.strip()]
+    if not entries:
+        raise ValueError("is empty")
+    allow_all = False
+    mailboxes: set[str] = set()
+    for i, entry in enumerate(entries, start=1):
+        if entry == "*":
+            allow_all = True
+            continue
+        mb = normalize_mailbox(entry)
+        if mb is None:
+            raise ValueError(f"entry #{i} is not '*' or a mailbox address (local@domain)")
+        mailboxes.add(mb)
+    return MailboxAllowList(mailboxes=frozenset(mailboxes), allow_all=allow_all)
+
+
+@dataclass(frozen=True)
+class AllConfig:
+    """Config for all mode: the admin API plus IMAP/SMTP access to the
+    allowed mailboxes through short-lived app passwords.
+
+    No mailbox password is configured; MAILCOW_MAIL_* are not read.
+    """
+
+    admin: AdminConfig
+    allowlist: MailboxAllowList
+    host: str
+    imap_host: str
+    smtp_host: str
+    imap_port: int = 993
+    smtp_port: int = 587
+    tls_verify: bool = True
+    temp_password_ttl: float = DEFAULT_TEMP_PASSWORD_TTL
+    enable_mail_send: bool = False
+    allow_sensitive_tools: bool = False
+    audit_log: Path = DEFAULT_AUDIT_LOG
+
+    def user_config(self, mailbox: str, password: str) -> UserConfig:
+        """UserConfig for one mailbox, reusing the user-mode IMAP/SMTP code."""
+        return UserConfig(
+            host=self.host,
+            mail_user=mailbox,
+            mail_pass=password,
+            imap_host=self.imap_host,
+            smtp_host=self.smtp_host,
+            imap_port=self.imap_port,
+            smtp_port=self.smtp_port,
+            tls_verify=self.tls_verify,
+            audit_log=self.audit_log,
+        )
+
+
+def _int_env(var: str, default: int, lo: int, hi: int) -> int:
+    raw = (os.environ.get(var) or "").strip()
+    if not raw:
+        return default
+    try:
+        val = int(raw)
+    except ValueError:
+        val = lo - 1
+    if not lo <= val <= hi:
+        _fail(f"{var} must be an integer between {lo} and {hi}")
+    return val
+
+
+def load_all_config() -> AllConfig:
+    """Load all-mode config. Exits (code 2) naming — never printing — a
+    missing or invalid variable."""
+    admin = load_admin_config()
+    raw = _require("MCP_MAILCOW_MAILBOXES")
+    try:
+        allowlist = parse_mailbox_allowlist(raw)
+    except ValueError as e:
+        _fail(f"MCP_MAILCOW_MAILBOXES {e}")
+    host = (os.environ.get("MAILCOW_HOST") or "").strip() or (
+        urlsplit(admin.base_url).hostname or ""
+    )
+    if not host:
+        _fail("MAILCOW_HOST is not set and no host could be taken from MAILCOW_ADMIN_URL")
+    return AllConfig(
+        admin=admin,
+        allowlist=allowlist,
+        host=host,
+        imap_host=os.environ.get("MAILCOW_IMAP_HOST") or host,
+        smtp_host=os.environ.get("MAILCOW_SMTP_HOST") or host,
+        imap_port=_int_env("MAILCOW_IMAP_PORT", 993, 1, _MAX_PORT),
+        smtp_port=_int_env("MAILCOW_SMTP_PORT", 587, 1, _MAX_PORT),
+        tls_verify=_bool_env("MCP_MAILCOW_TLS_VERIFY", True),
+        temp_password_ttl=_int_env(
+            "MCP_MAILCOW_TEMP_PASSWORD_TTL",
+            DEFAULT_TEMP_PASSWORD_TTL,
+            _MIN_TEMP_PASSWORD_TTL,
+            _MAX_TEMP_PASSWORD_TTL,
+        ),
+        enable_mail_send=_bool_env("MCP_MAILCOW_ENABLE_MAIL_SEND", False),
+        allow_sensitive_tools=_bool_env("MCP_MAILCOW_ALLOW_SENSITIVE_TOOLS", False),
+        audit_log=admin.audit_log,
+    )
+
+
+# =============================================================================
 # Transport (stdio / HTTP)
 # =============================================================================
 
@@ -122,7 +264,7 @@ def _fail(msg: str) -> NoReturn:
     sys.exit(2)
 
 
-MODES = ("user", "admin")
+MODES = ("user", "admin", "all")
 
 
 def env_mode() -> str | None:
@@ -235,8 +377,10 @@ def load_http_config(host: str, port: int) -> HttpConfig:
     )
 
 
-def write_tools_enabled(transport: str) -> bool:
+def write_tools_enabled(transport: str, mode: str | None = None) -> bool:
     """``MCP_MAILCOW_ENABLE_WRITE_TOOLS``; defaults to true for stdio (unchanged
     behaviour) and false for HTTP (a network-reachable server is read-only
-    unless explicitly opted in)."""
-    return _bool_env("MCP_MAILCOW_ENABLE_WRITE_TOOLS", transport == "stdio")
+    unless explicitly opted in). In ``all`` mode the default is false for
+    every transport: that server reads untrusted mail from many mailboxes
+    while holding the admin API key."""
+    return _bool_env("MCP_MAILCOW_ENABLE_WRITE_TOOLS", transport == "stdio" and mode != "all")

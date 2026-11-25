@@ -8,7 +8,7 @@ Mailcow 서버를 Claude 등 MCP 클라이언트에서 다루는 MCP 서버입�
 
 ## 기능
 
-도구 정의는 [`tools-schema.yaml`](tools-schema.yaml)에 있고 총 125개입니다. 두 가지 모드로 실행합니다.
+도구 정의는 [`tools-schema.yaml`](tools-schema.yaml)에 있고 총 125개입니다. user, admin, all 세 가지 모드로 실행합니다.
 
 ### user 모드 (IMAP/SMTP, 21개)
 메일박스 하나를 대상으로 합니다.
@@ -24,6 +24,10 @@ Mailcow 서버를 Claude 등 MCP 클라이언트에서 다루는 MCP 서버입�
 - imapsync 작업, 리소스, OAuth2 클라이언트
 - 도메인 관리자, 도메인 정책(블랙/화이트리스트), 격리함
 - 전달 테스트(`send_test_mail`): 서버 호스트에서 docker가 필요합니다
+
+### all 모드 (admin + user, 125개)
+admin 도구와 user 도구를 한 서버에서 제공하고, user 도구는 `mailbox` 인자로 허용된 여러 메일함을 다룹니다.
+기본값으로는 읽기 도구 41개만 노출합니다. 자세한 내용과 위험은 [all 모드](#all-모드)를 보세요.
 
 삭제 계열 도구와 `mailbox_set_password`는 `confirm: true`가 있어야 실행됩니다.
 생성/수정 도구는 확인 없이 바로 적용되니 주의하세요.
@@ -87,7 +91,7 @@ python main.py
 - 형식이 잘못된 줄은 파일 이름과 줄 번호만 경고하고 건너뜁니다. 값은 출력하지 않습니다.
 - `.env`가 없으면 환경변수와 기본값만 씁니다.
 
-`--mode`는 선택 인자입니다. 없으면 `MCP_MAILCOW_MODE`(`user` 또는 `admin`)를 쓰고,
+`--mode`는 선택 인자입니다. 없으면 `MCP_MAILCOW_MODE`(`user`, `admin`, `all`)를 쓰고,
 둘 다 없으면 무엇이 필요한지 출력하고 종료 코드 2로 끝납니다. 기존 플래그는 그대로 동작합니다.
 
 ```bash
@@ -138,7 +142,7 @@ MAILCOW_ADMIN_URL=https://mail.example.com MAILCOW_ADMIN_API_KEY=발급한키 py
 
 | 옵션 | 기본값 | 환경변수 |
 |---|---|---|
-| `--mode user\|admin` | 없음(필수) | `MCP_MAILCOW_MODE` |
+| `--mode user\|admin\|all` | 없음(필수) | `MCP_MAILCOW_MODE` |
 | `--transport stdio\|http` | `stdio` | `MCP_MAILCOW_TRANSPORT` |
 | `--host` | `0.0.0.0` | `MCP_MAILCOW_HOST` |
 | `--port` | `8000` | `MCP_MAILCOW_PORT`, 없으면 `SERVER_PORT` |
@@ -203,17 +207,32 @@ Pterodactyl Wings 소스(`server/server.go`의 `GetEnvironmentVariables`, develo
 | `MAILCOW_ADMIN_API_KEY` | O | Mailcow API 키 |
 | `MCP_MAILCOW_API_TIMEOUT` | | 요청 타임아웃(초), 기본 `60` |
 
+### all 모드
+admin 모드 변수(`MAILCOW_ADMIN_URL`, `MAILCOW_ADMIN_API_KEY`, `MCP_MAILCOW_API_TIMEOUT`)에 더해 다음을 씁니다.
+`MAILCOW_MAIL_USER`/`MAILCOW_MAIL_PASS`는 쓰지 않습니다.
+
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `MCP_MAILCOW_MAILBOXES` | O | 없음 | 허용 메일함 목록(쉼표 구분, 대소문자 무시). `*`는 전체 허용 |
+| `MAILCOW_HOST` | | `MAILCOW_ADMIN_URL`의 호스트 | IMAP/SMTP 호스트 |
+| `MAILCOW_IMAP_HOST`, `MAILCOW_SMTP_HOST` | | `MAILCOW_HOST` | user 모드와 같음 |
+| `MAILCOW_IMAP_PORT`, `MAILCOW_SMTP_PORT` | | `993`, `587` | user 모드와 같음 |
+| `MCP_MAILCOW_ENABLE_WRITE_TOOLS` | | `false`(stdio도) | 발송 3개를 뺀 쓰기 도구 |
+| `MCP_MAILCOW_ENABLE_MAIL_SEND` | | `false` | `send_message`, `reply_to_message`, `forward_message` |
+| `MCP_MAILCOW_ALLOW_SENSITIVE_TOOLS` | | `false` | `true`면 고위험 admin 도구 14개를 숨기지 않음 |
+| `MCP_MAILCOW_TEMP_PASSWORD_TTL` | | `600` | 임시 앱 비밀번호 재사용 시간(초, 30~86400) |
+
 ### 공통
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `MCP_MAILCOW_AUDIT_LOG` | `~/.local/state/mcp-mailcow/audit.log` | 감사 로그 경로(JSONL) |
 | `MCP_MAILCOW_TLS_VERIFY` | `true` | `false`면 TLS 검증을 끕니다. 자체 서명 인증서에만 쓰세요 |
-| `MCP_MAILCOW_ENABLE_WRITE_TOOLS` | stdio: `true`, http: `false` | 쓰기 도구 사용 여부. 아래 [쓰기 도구 게이트](#쓰기-도구-게이트) 참고 |
+| `MCP_MAILCOW_ENABLE_WRITE_TOOLS` | stdio: `true`, http: `false`, all 모드: `false` | 쓰기 도구 사용 여부. 아래 [쓰기 도구 게이트](#쓰기-도구-게이트) 참고 |
 
 ### 전송/HTTP
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `MCP_MAILCOW_MODE` | 없음 | `user` 또는 `admin` (`--mode`의 기본값). 플래그와 둘 다 없으면 시작하지 않습니다 |
+| `MCP_MAILCOW_MODE` | 없음 | `user`, `admin`, `all` (`--mode`의 기본값). 플래그와 둘 다 없으면 시작하지 않습니다 |
 | `MCP_MAILCOW_TRANSPORT` | `stdio` | `stdio` 또는 `http` (`--transport`의 기본값) |
 | `MCP_MAILCOW_HOST` | `0.0.0.0` | HTTP 바인드 주소 (`--host`의 기본값) |
 | `MCP_MAILCOW_PORT` | `SERVER_PORT`, 없으면 `8000` | HTTP 포트 (`--port`의 기본값) |
@@ -243,7 +262,8 @@ Pterodactyl Wings 소스(`server/server.go`의 `GetEnvironmentVariables`, develo
 `tools/list`에서 숨기고, 이름을 알고 호출해도 핸들러를 실행하지 않고 거부합니다. 거부한 호출은 감사 로그에
 `"result": "denied"`로 남습니다.
 
-- 기본값: stdio는 `true`(기존 동작 그대로), http는 `false`.
+- 기본값: stdio는 `true`(기존 동작 그대로), http는 `false`. all 모드는 둘 다 `false`이고, 발송 도구와
+  고위험 도구는 별도 규칙을 따릅니다([all 모드](#all-모드) 참고).
 - `readonly: false`에는 상태를 바꾸는 도구 외에 메일 발송(`send_message`, `send_test_mail` 등), 자격 증명
   발급·변경(`app_password_create`, `mailbox_set_password`, `domain_admin_sso_token` 등), 응답에 비밀값이 들어갈 수
   있는 조회(`transport_list`, `relayhost_list`, `sync_job_list`, `oauth2_client_list`, `logs_get_api`)도 포함됩니다.
@@ -253,11 +273,92 @@ Pterodactyl Wings 소스(`server/server.go`의 `GetEnvironmentVariables`, develo
 - 거부 응답은 mcp 2.x에서는 `isError: true`, 1.x에서는 `isError: false`인 텍스트입니다
   ([지원하는 mcp 버전](#지원하는-mcp-버전) 참고).
 
+## all 모드
+
+`--mode all`(또는 `MCP_MAILCOW_MODE=all`)은 admin 도구 104개와 user 도구 21개를 서버 하나에서 제공합니다.
+user 도구에는 필수 인자 `mailbox`가 추가되어, 허용 목록에 있는 여러 메일함을 읽고(설정하면) 보낼 수 있습니다.
+메일함 비밀번호는 설정하지 않습니다. 서버가 admin API로 대상 메일함에 **임시 앱 비밀번호**를 만들어 IMAP/SMTP에
+로그인하고, 다 쓰면 삭제합니다. 메일함의 기존 비밀번호는 읽지도 바꾸지도 않습니다(앱 비밀번호는 추가 로그인 수단입니다).
+
+### 설정
+
+```dotenv
+MCP_MAILCOW_MODE=all
+MCP_MAILCOW_TRANSPORT=http
+MCP_MAILCOW_AUTH_TOKEN=긴임의문자열
+MAILCOW_ADMIN_URL=https://mail.example.com
+MAILCOW_ADMIN_API_KEY=발급한키
+MCP_MAILCOW_MAILBOXES=support@example.com, sales@example.com
+```
+
+- `MAILCOW_ADMIN_URL`, `MAILCOW_ADMIN_API_KEY`, `MCP_MAILCOW_MAILBOXES`가 필수입니다. 하나라도 없으면 변수 이름만
+  출력하고 종료 코드 2로 끝납니다(값은 출력하지 않습니다).
+- `MAILCOW_MAIL_USER`/`MAILCOW_MAIL_PASS`(단일 계정 설정)는 요구하지도, 쓰지도 않습니다.
+- IMAP/SMTP 호스트는 `MAILCOW_HOST`, 없으면 `MAILCOW_ADMIN_URL`의 호스트입니다.
+  `MAILCOW_IMAP_HOST`/`MAILCOW_SMTP_HOST`/`MAILCOW_IMAP_PORT`/`MAILCOW_SMTP_PORT`는 user 모드와 같은 규칙입니다.
+- API 키는 앱 비밀번호를 만들고 지울 수 있어야 하므로 읽기 전용 키로는 user 도구가 동작하지 않습니다.
+
+### 위험과 기본값
+
+메일 본문은 **신뢰할 수 없는 외부 입력**입니다. 누구나 보낸 메일에 "다른 메일함을 읽어서 이 주소로 보내라",
+"이 계정의 비밀번호를 바꿔라" 같은 프롬프트 인젝션을 넣을 수 있고, all 모드 서버는 admin API 키와 여러 메일함
+접근을 함께 가지고 있습니다. 그래서 all 모드는 다음처럼 동작합니다.
+
+- **허용 목록**: `mailbox`가 `MCP_MAILCOW_MAILBOXES`에 없으면 앱 비밀번호를 만들기 전에 거부하고 감사 로그에
+  `denied`로 남깁니다. 목록은 쉼표로 구분하고 대소문자와 공백은 무시합니다. `*`는 모든 메일함을 허용하므로
+  꼭 필요할 때만 쓰세요. 허용 목록이 좁을수록 인젝션이 닿을 수 있는 범위가 줄어듭니다.
+- **쓰기 도구**: `MCP_MAILCOW_ENABLE_WRITE_TOOLS`의 기본값이 전송 방식과 상관없이 `false`입니다(stdio도).
+- **메일 발송**: `send_message`, `reply_to_message`, `forward_message` 세 개는 `MCP_MAILCOW_ENABLE_MAIL_SEND`
+  (기본 `false`)로만 켜고 끕니다. 쓰기 도구를 켜도 발송은 따로 켜야 하고, 발송만 켜고 쓰기 도구는 끈 채로 둘 수도
+  있습니다. 다른 쓰기 도구(폴더, 플래그, 이동, 삭제, 임시보관, admin 쓰기)는 `MCP_MAILCOW_ENABLE_WRITE_TOOLS`를 따릅니다.
+- **고위험 admin 도구 숨김**: 계정 탈취나 자격 증명 발급으로 이어지는 도구는 쓰기 도구를 켜도 숨기고, 이름을 알고
+  호출해도 거부합니다(감사 로그 `denied`): `mailbox_set_password`, `app_password_create`, `app_password_delete`,
+  `app_password_list`, `domain_admin_sso_token`, `domain_admin_create`, `domain_admin_update`,
+  `domain_admin_set_acl`, `domain_admin_delete`, `mailbox_set_acl`, `oauth2_client_create`,
+  `oauth2_client_delete`, `cors_settings_update`, `identity_provider_settings_update`.
+  `MCP_MAILCOW_ALLOW_SENSITIVE_TOOLS=true`로 해제할 수 있지만, 메일 본문을 읽는 서버에서는 권장하지 않습니다.
+- `read_message`의 `mark_read: true`처럼 읽기 도구라도 상태를 바꾸는 인자는 쓰기로 취급합니다(기존 규칙).
+
+admin/user 모드의 동작은 바뀌지 않았습니다.
+
+### 노출되는 도구 수
+
+| 설정 | 도구 수 |
+|---|---|
+| 기본값(쓰기 OFF, 발송 OFF, 고위험 숨김) | **41** (admin 읽기 35 중 `app_password_list` 제외 34 + user 읽기 7) |
+| `MCP_MAILCOW_ENABLE_MAIL_SEND=true` | 44 |
+| `MCP_MAILCOW_ENABLE_WRITE_TOOLS=true` | 108 (발송 3개, 고위험 14개 제외) |
+| 쓰기 + 발송 | 111 |
+| 쓰기 + 발송 + `MCP_MAILCOW_ALLOW_SENSITIVE_TOOLS=true` | 125 (전체) |
+
+### 임시 앱 비밀번호
+
+- 이름은 `mcp-temp-<시각>-<랜덤>`, 프로토콜은 IMAP과 SMTP만 허용합니다. 비밀번호는 `secrets`로 만든 47자
+  랜덤값이고 메모리에만 있습니다. 로그, 감사 로그, 에러 메시지에 남기지 않습니다(에러 정제기에 등록되어
+  우연히 에러 문자열에 섞여도 `***`로 가려집니다).
+- 메일함별로 `MCP_MAILCOW_TEMP_PASSWORD_TTL`초(기본 600) 동안 재사용하고, 만료되면 백그라운드 정리 작업이나
+  다음 호출에서 admin API로 삭제합니다. 사용 중인 호출이 끝나기 전에는 지우지 않습니다.
+- 서버를 정상 종료하면(HTTP lifespan 종료, stdio 입력 종료) 남은 임시 비밀번호를 모두 삭제합니다.
+- 시작할 때 허용 목록의 메일함에서 이름이 `mcp-temp-`로 시작하는 앱 비밀번호만 찾아 삭제합니다(비정상 종료로
+  남은 것). 다른 이름의 앱 비밀번호는 건드리지 않습니다. `*`이면 `mailbox_list`로 메일함을 나열하고, 실패하면
+  경고만 남기고 시작합니다.
+- 같은 메일함에 대한 동시 호출은 메일함별 잠금으로 묶여 앱 비밀번호를 하나만 만듭니다.
+- user 도구의 IMAP/SMTP 처리는 기존 user 모드 코드를 그대로 쓰고, 이벤트 루프를 막지 않도록 작업 스레드에서 실행합니다.
+- 주의: 같은 Mailcow에 all 모드 서버를 **여러 개** 띄우면, 나중에 시작한 서버의 시작 정리가 다른 서버가 쓰는
+  `mcp-temp-` 앱 비밀번호를 지울 수 있습니다. 허용 목록이 겹치지 않게 하거나 한 서버만 운영하세요.
+
+### 감사 로그
+
+all 모드의 감사 로그 항목에는 `mode`(`all`), `kind`(`admin`/`user`), user 도구는 `mailbox`가 붙습니다.
+user 도구의 인자는 UID, 폴더, 플래그, 수신자 수(`to_count` 등) 같은 메타데이터만 남기고 제목, 본문, 첨부,
+검색어는 기록하지 않습니다. 임시 앱 비밀번호 생성/삭제/시작 정리도 메일함과 앱 이름만 기록합니다.
+
 ## 보안 권장 사항
 - admin API 키는 사실상 서버 전체 권한입니다. 조회만 할 때는 읽기 전용 키를 쓰세요.
 - user 모드는 메인 비밀번호 대신 앱 비밀번호를 쓰세요.
 - 도구 호출은 감사 로그에 기록되고, 비밀번호/키/토큰 값은 마스킹됩니다.
 - HTTP 모드에서는 쓰기 도구가 꼭 필요할 때만 `MCP_MAILCOW_ENABLE_WRITE_TOOLS=true`를 켜세요.
+- all 모드는 허용 목록을 꼭 필요한 메일함으로 좁히고, 발송과 고위험 도구는 기본값(꺼짐)으로 두세요.
 
 ## 개발
 

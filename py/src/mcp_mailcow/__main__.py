@@ -1,4 +1,4 @@
-"""Entry point: ``mcp-mailcow [--mode user|admin] [--transport stdio|http]``.
+"""Entry point: ``mcp-mailcow [--mode user|admin|all] [--transport stdio|http]``.
 
 Every flag has an environment-variable default (``MCP_MAILCOW_MODE``,
 ``MCP_MAILCOW_TRANSPORT``, ...). ``main()`` can also load a ``.env`` file first
@@ -53,8 +53,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=list(MODES),
         default=env_mode(),
-        help="user: IMAP/SMTP mailbox operations | admin: Mailcow REST API operations. "
-        "Default from MCP_MAILCOW_MODE; one of the two is required.",
+        help="user: IMAP/SMTP mailbox operations | admin: Mailcow REST API operations | "
+        "all: admin tools plus user tools for the mailboxes in MCP_MAILCOW_MAILBOXES. "
+        "Default from MCP_MAILCOW_MODE; one of them is required.",
     )
     parser.add_argument(
         "--transport",
@@ -91,12 +92,12 @@ def main(argv: Sequence[str] | None = None, *, dotenv_path: Path | None = None) 
     args = parser.parse_args(argv)
     if args.mode is None:
         parser.error(
-            "the server mode is required: pass --mode user|admin or set "
-            "MCP_MAILCOW_MODE=user|admin (environment variable or .env)"
+            "the server mode is required: pass --mode user|admin|all or set "
+            "MCP_MAILCOW_MODE=user|admin|all (environment variable or .env)"
         )
 
     if args.transport == "stdio":
-        built = build_server(args.mode, enable_write_tools=write_tools_enabled("stdio"))
+        built = build_server(args.mode, enable_write_tools=write_tools_enabled("stdio", args.mode))
         try:
             asyncio.run(run_stdio(built))
         except KeyboardInterrupt:
@@ -111,7 +112,7 @@ def main(argv: Sequence[str] | None = None, *, dotenv_path: Path | None = None) 
     )
     # Check auth before touching the Mailcow config: refuse early, exit 2.
     http_cfg = load_http_config(args.host, args.port)
-    built = build_server(args.mode, enable_write_tools=write_tools_enabled("http"))
+    built = build_server(args.mode, enable_write_tools=write_tools_enabled("http", args.mode))
     try:
         run_http(built, http_cfg)
     except KeyboardInterrupt:

@@ -16,7 +16,8 @@ call argument and as a tool response value.
 from __future__ import annotations
 
 import re
-from typing import Iterable
+import threading
+from collections.abc import Iterable
 
 # Keys whose value must be masked. Match is case-insensitive on the key.
 # Includes both bare names (password) and the env var conventions we use
@@ -70,6 +71,36 @@ _AUTH_PATTERN = re.compile(
 )
 
 
+# Literal secret values known at runtime (all mode's temporary app passwords).
+# Any occurrence in sanitized text is replaced by ``***`` whatever surrounds it,
+# so a backend error that echoes a password cannot leak it even without a
+# ``key=value`` shape. Guarded by a lock: user tools run in worker threads.
+_RUNTIME_SECRETS: set[str] = set()
+_RUNTIME_LOCK = threading.Lock()
+_MIN_RUNTIME_SECRET_LEN = 8  # never register short strings (would mask normal text)
+
+
+def register_secret(value: str) -> None:
+    """Mask every literal occurrence of ``value`` in :func:`sanitize_text`."""
+    if value and len(value) >= _MIN_RUNTIME_SECRET_LEN:
+        with _RUNTIME_LOCK:
+            _RUNTIME_SECRETS.add(value)
+
+
+def unregister_secret(value: str) -> None:
+    with _RUNTIME_LOCK:
+        _RUNTIME_SECRETS.discard(value)
+
+
+def _mask_runtime_secrets(text: str) -> str:
+    with _RUNTIME_LOCK:
+        secrets = sorted(_RUNTIME_SECRETS, key=len, reverse=True)
+    for value in secrets:
+        if value in text:
+            text = text.replace(value, "***")
+    return text
+
+
 def sanitize_text(text: str) -> str:
     """Replace secret-bearing values with `***` inside arbitrary text.
 
@@ -82,16 +113,17 @@ def sanitize_text(text: str) -> str:
     """
     if not text:
         return text
+    text = _mask_runtime_secrets(text)
     text = _KV_PATTERN.sub(_redact_kv_match, text)
     text = _AUTH_PATTERN.sub(_redact_auth_match, text)
     return text
 
 
-def _redact_kv_match(m: "re.Match[str]") -> str:
+def _redact_kv_match(m: re.Match[str]) -> str:
     return f"{m.group('key')}{m.group('sep')}{m.group('quote')}***{m.group('quote')}"
 
 
-def _redact_auth_match(m: "re.Match[str]") -> str:
+def _redact_auth_match(m: re.Match[str]) -> str:
     return f"{m.group('scheme')} ***"
 
 
@@ -107,4 +139,9 @@ def sanitize_exception(e: BaseException) -> str:
     return f"{type_name}: {msg}" if msg else type_name
 
 
-__all__: Iterable[str] = ("sanitize_text", "sanitize_exception")
+__all__: Iterable[str] = (
+    "sanitize_text",
+    "sanitize_exception",
+    "register_secret",
+    "unregister_secret",
+)

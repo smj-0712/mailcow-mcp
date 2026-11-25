@@ -13,10 +13,48 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from . import admin_tools as at
+from . import user_tools as ut
 from .audit import AuditLogger
 from .config import AdminConfig, UserConfig
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[Any]]
+
+
+#: User tool name → factory name in user_tools.py. Shared by user mode and
+#: all mode (which builds a per-mailbox UserContext for every call).
+USER_TOOL_FACTORY_NAMES: dict[str, str] = {
+    # mailbox.read
+    "list_inbox": "list_inbox",
+    "read_message": "read_message",
+    "get_message_raw": "get_message_raw",
+    "search_messages": "search_messages",
+    "get_unread_count": "get_unread_count",
+    "download_attachment": "download_attachment",
+    # mailbox.folders
+    "list_folders": "list_folders",
+    "create_folder": "create_folder",
+    "rename_folder": "rename_folder",
+    "delete_folder": "delete_folder",
+    "empty_folder": "empty_folder",
+    # mailbox.send
+    "send_message": "send_message",
+    "reply_to_message": "reply_to_message",
+    "forward_message": "forward_message",
+    "save_draft": "save_draft",
+    # mailbox.flags
+    "mark_read": "mark_read",
+    "mark_unread": "mark_unread",
+    "mark_flagged": "mark_flagged",
+    "set_custom_flag": "set_custom_flag",
+    "move_message": "move_message",
+    "delete_message": "delete_message",
+}
+
+
+def user_tool_factories() -> dict[str, Callable[[Any], ToolHandler]]:
+    """User tool name → ``factory(UserContext) -> ToolHandler``."""
+    return {name: getattr(ut, attr) for name, attr in USER_TOOL_FACTORY_NAMES.items()}
 
 
 def build_user_registry(
@@ -28,37 +66,8 @@ def build_user_registry(
     close (IMAP sessions are short-lived per call), but we return it for
     a uniform API with admin mode.
     """
-    from . import user_tools as ut
-
     ctx = ut.UserContext(config=config, audit=audit)
-
-    registry = {
-        # mailbox.read
-        "list_inbox": ut.list_inbox(ctx),
-        "read_message": ut.read_message(ctx),
-        "get_message_raw": ut.get_message_raw(ctx),
-        "search_messages": ut.search_messages(ctx),
-        "get_unread_count": ut.get_unread_count(ctx),
-        "download_attachment": ut.download_attachment(ctx),
-        # mailbox.folders
-        "list_folders": ut.list_folders(ctx),
-        "create_folder": ut.create_folder(ctx),
-        "rename_folder": ut.rename_folder(ctx),
-        "delete_folder": ut.delete_folder(ctx),
-        "empty_folder": ut.empty_folder(ctx),
-        # mailbox.send
-        "send_message": ut.send_message(ctx),
-        "reply_to_message": ut.reply_to_message(ctx),
-        "forward_message": ut.forward_message(ctx),
-        "save_draft": ut.save_draft(ctx),
-        # mailbox.flags
-        "mark_read": ut.mark_read(ctx),
-        "mark_unread": ut.mark_unread(ctx),
-        "mark_flagged": ut.mark_flagged(ctx),
-        "set_custom_flag": ut.set_custom_flag(ctx),
-        "move_message": ut.move_message(ctx),
-        "delete_message": ut.delete_message(ctx),
-    }
+    registry = {name: factory(ctx) for name, factory in user_tool_factories().items()}
     return registry, ctx
 
 
@@ -71,8 +80,6 @@ def build_admin_registry(
     ``MailcowClient``; the caller must invoke ``await ctx.aclose()`` at
     server shutdown.
     """
-    from . import admin_tools as at
-
     ctx = at.AdminContext(config=config, audit=audit)
 
     registry = {

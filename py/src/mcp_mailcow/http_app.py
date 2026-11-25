@@ -103,6 +103,7 @@ def create_app(built: BuiltServer, cfg: HttpConfig) -> Starlette:
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         try:
+            await built.astart()
             async with manager.run():
                 yield
         finally:
@@ -142,6 +143,17 @@ def run_http(built: BuiltServer, cfg: HttpConfig) -> None:
         "ENABLED" if built.enable_write_tools
         else "disabled (read-only; set MCP_MAILCOW_ENABLE_WRITE_TOOLS=true to enable)",
     )
+    if built.policy is not None and built.policy.enable_mail_send is not None:
+        logger.info(
+            "mail send tools %s",
+            "ENABLED" if built.policy.enable_mail_send
+            else "disabled (set MCP_MAILCOW_ENABLE_MAIL_SEND=true to enable)",
+        )
+        logger.info(
+            "sensitive admin tools %s",
+            "hidden (MCP_MAILCOW_ALLOW_SENSITIVE_TOOLS=false)" if built.policy.hide_sensitive
+            else "ALLOWED (MCP_MAILCOW_ALLOW_SENSITIVE_TOOLS=true)",
+        )
     if cfg.allowed_hosts:
         logger.info("Host header allow-list: %s", ", ".join(cfg.allowed_hosts))
 
