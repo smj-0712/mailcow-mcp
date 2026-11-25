@@ -1,133 +1,105 @@
-# mcp-mailcow
+# mailcow-mcp
 
-[![PyPI](https://img.shields.io/pypi/v/mcp-mailcow)](https://pypi.org/project/mcp-mailcow/)
-[![npm](https://img.shields.io/npm/v/mcp-mailcow)](https://www.npmjs.com/package/mcp-mailcow)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+Mailcow 서버를 Claude 등 MCP 클라이언트에서 다루는 MCP 서버입니다.
+[maximeoliv/mcp-mailcow](https://github.com/maximeoliv/mcp-mailcow)(MIT)를 포크해 Python 구현만 남기고 별도로 유지하는 프로젝트입니다.
 
-**Model Context Protocol server for Mailcow.** Pilot your Mailcow instance
-from Claude (or any MCP-compatible client): read/send mail, manage mailboxes,
-aliases, domains, app passwords.
+> 현재는 **stdio 전송만** 지원합니다. HTTP 전송은 추가할 예정이며 아직 없습니다.
 
-This is a **BYOK** (Bring Your Own Keys) package — install it on your own
-machine, point it at **your** Mailcow, use **your** credentials.
+## 기능
 
-## Features
+도구 정의는 [`tools-schema.yaml`](tools-schema.yaml)에 있고 총 125개입니다. 두 가지 모드로 실행합니다.
 
-### User mode (mailbox operations)
-- Read inbox, search messages, download attachments
-- Send mail, reply to messages
-- Mark read/unread/flagged, move, delete
+### user 모드 (IMAP/SMTP, 21개)
+메일박스 하나를 대상으로 합니다.
+- 읽기: 받은편지함 목록, 메시지 읽기, 원문, 검색, 안 읽은 수, 첨부 다운로드
+- 보내기: 새 메일, 답장, 전달, 임시보관
+- 폴더: 목록, 생성, 이름 변경, 삭제, 비우기
+- 플래그/이동: 읽음/안 읽음, 별표, 커스텀 플래그, 이동, 삭제
 
-### Admin mode (server operations)
-- Manage mailboxes (create / list / update / delete / quota)
-- Manage aliases (create / list / delete)
-- Manage domains (list / create)
-- Manage app passwords (list / create / delete with protocol scoping)
-- Quota reports, deliverability tests, server status
+### admin 모드 (Mailcow REST API, 104개)
+- 도메인, 메일박스(용량 리포트, 태그, ACL 포함), 별칭, 시간제한 별칭, 앱 비밀번호
+- DKIM
+- 메일 라우팅: BCC 맵, 수신자 맵, transport, relayhost, TLS 정책, forward host
+- imapsync 작업, 리소스, OAuth2 클라이언트
+- 도메인 관리자, 도메인 정책(블랙/화이트리스트), 격리함
+- 전달 테스트(`send_test_mail`): 서버 호스트에서 docker가 필요합니다
 
-## Install
+삭제 계열 도구와 `mailbox_set_password`는 `confirm: true`가 있어야 실행됩니다.
+생성/수정 도구는 확인 없이 바로 적용되니 주의하세요.
 
-### Python (recommended)
+## 설치와 실행
 
-```bash
-# Zero-install with uvx (recommended)
-uvx mcp-mailcow --mode user
-
-# Or pip install
-pip install mcp-mailcow
-```
-
-### Node / TypeScript
+Python 3.10 이상과 [uv](https://docs.astral.sh/uv/)가 필요합니다.
 
 ```bash
-npm install -g mcp-mailcow
-# or use npx
-npx mcp-mailcow --mode user
+git clone https://github.com/smj-0712/mailcow-mcp.git
 ```
 
-## Configuration
+Claude Code에 등록하는 예시(admin 모드)입니다. 경로는 절대경로를 쓰세요.
 
-### Claude Desktop / Claude Code
-
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "mailcow-mailbox": {
-      "command": "uvx",
-      "args": ["mcp-mailcow", "--mode", "user"],
-      "env": {
-        "MAILCOW_HOST": "mail.example.com",
-        "MAILCOW_MAIL_USER": "you@example.com",
-        "MAILCOW_MAIL_PASS": "your-app-password"
-      }
-    },
-    "mailcow-admin": {
-      "command": "uvx",
-      "args": ["mcp-mailcow", "--mode", "admin"],
-      "env": {
-        "MAILCOW_ADMIN_URL": "https://mail.example.com",
-        "MAILCOW_ADMIN_API_KEY": "your-api-key"
-      }
-    }
-  }
-}
+```bash
+claude mcp add -s user mailcow-admin \
+  -e MAILCOW_ADMIN_URL=https://mail.example.com \
+  -e MAILCOW_ADMIN_API_KEY=발급한키 \
+  -- uvx --from /path/to/mailcow-mcp/py mcp-mailcow --mode admin
 ```
 
-You can run **both modes** simultaneously (each gets its own server entry).
+user 모드는 환경변수와 `--mode`만 바꿉니다.
 
-### Environment variables
+```bash
+claude mcp add -s user mailcow-mail \
+  -e MAILCOW_HOST=mail.example.com \
+  -e MAILCOW_MAIL_USER=you@example.com \
+  -e MAILCOW_MAIL_PASS=앱비밀번호 \
+  -- uvx --from /path/to/mailcow-mcp/py mcp-mailcow --mode user
+```
 
-#### User mode
-| Variable | Required | Description |
+명령 이름과 패키지 이름은 아직 원본과 같은 `mcp-mailcow`입니다.
+
+## 환경변수
+
+### user 모드
+| 변수 | 필수 | 설명 |
 |---|---|---|
-| `MAILCOW_HOST` | yes | Mailcow hostname (e.g. `mail.example.com`) |
-| `MAILCOW_MAIL_USER` | yes | Full email address (e.g. `you@example.com`) |
-| `MAILCOW_MAIL_PASS` | yes | App password (recommended) or main password |
-| `MAILCOW_IMAP_PORT` | no | Default `993` (IMAPS) |
-| `MAILCOW_SMTP_PORT` | no | Default `587` (STARTTLS) |
+| `MAILCOW_HOST` | O | Mailcow 호스트명 |
+| `MAILCOW_MAIL_USER` | O | 메일 주소 전체 |
+| `MAILCOW_MAIL_PASS` | O | 앱 비밀번호 권장 |
+| `MAILCOW_IMAP_HOST`, `MAILCOW_SMTP_HOST` | | 기본값은 `MAILCOW_HOST` |
+| `MAILCOW_IMAP_PORT` | | 기본 `993` |
+| `MAILCOW_SMTP_PORT` | | 기본 `587` |
 
-#### Admin mode
-| Variable | Required | Description |
+### admin 모드
+| 변수 | 필수 | 설명 |
 |---|---|---|
-| `MAILCOW_ADMIN_URL` | yes | Base URL (e.g. `https://mail.example.com`) |
-| `MAILCOW_ADMIN_API_KEY` | yes | Mailcow API key (admin → Configuration → Access → API) |
+| `MAILCOW_ADMIN_URL` | O | 예: `https://mail.example.com` |
+| `MAILCOW_ADMIN_API_KEY` | O | Mailcow API 키 |
+| `MCP_MAILCOW_API_TIMEOUT` | | 요청 타임아웃(초), 기본 `60` |
 
-#### Common
-| Variable | Default | Description |
+### 공통
+| 변수 | 기본값 | 설명 |
 |---|---|---|
-| `MCP_MAILCOW_AUDIT_LOG` | `~/.local/state/mcp-mailcow/audit.log` | Audit log path (JSONL) |
-| `MCP_MAILCOW_TLS_VERIFY` | `true` | Set to `false` only for self-signed certs (not recommended) |
+| `MCP_MAILCOW_AUDIT_LOG` | `~/.local/state/mcp-mailcow/audit.log` | 감사 로그 경로(JSONL) |
+| `MCP_MAILCOW_TLS_VERIFY` | `true` | `false`면 TLS 검증을 끕니다. 자체 서명 인증서에만 쓰세요 |
 
-## Security best practices
+## 보안 권장 사항
+- admin API 키는 사실상 서버 전체 권한입니다. 조회만 할 때는 읽기 전용 키를 쓰세요.
+- user 모드는 메인 비밀번호 대신 앱 비밀번호를 쓰세요.
+- 도구 호출은 감사 로그에 기록되고, 비밀번호/키/토큰 값은 마스킹됩니다.
 
-1. **Use app passwords**, not your main mailbox password.
-   In Mailcow: mailbox → app passwords → create, scope to IMAP+SMTP only.
+## 개발
 
-2. **Use a Read-Only API key** for admin mode if you only need to query.
-   (Set `API_KEY_READ_ONLY` instead of `API_KEY` in `mailcow.conf`.)
-
-3. **Audit log review**: tail `~/.local/state/mcp-mailcow/audit.log` periodically.
-
-4. **Destructive operations** (`mailbox_delete`, `alias_delete`) require an
-   explicit `confirm: true` parameter. The server refuses without it.
-
-## Development
-
-This is a monorepo with parallel Python and TypeScript implementations.
-Both share a common tool schema (`tools-schema.yaml`) as source of truth.
-
-```
-mcp-mailcow/
-├── tools-schema.yaml       ← source of truth (read by both impls at build time)
-├── py/                     ← Python implementation (PyPI)
-├── node/                   ← TypeScript implementation (npm)
-└── shared/                 ← shared mocks, integration tests
+```bash
+cd py
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e .[dev]
+pytest -v
+ruff check src
+mypy src/mcp_mailcow
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and contribution guidelines.
+루트의 `tools-schema.yaml`이 도구 정의의 원본이고, `py/src/mcp_mailcow/tools-schema.yaml`에 같은 내용이 복사돼 있습니다. 도구를 바꾸면 두 파일을 함께 갱신해야 합니다.
 
-## License
+## 라이선스
 
-MIT — see [LICENSE](LICENSE).
+MIT. 원저작자 Maxime Olivier의 저작권 고지를 [LICENSE](LICENSE)에 유지합니다.
